@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>CashFlow Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0f1420; --panel:#171e2e; --panel2:#1d2740; --line:#2a3550;
+    --text:#e6ebf5; --muted:#8b97b0; --green:#2ecc8f; --red:#ff5c72;
+    --blue:#4c8dff; --radius:14px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',system-ui,sans-serif}
+  body{background:var(--bg);color:var(--text);min-height:100vh;padding:20px}
+  header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:20px}
+  h1{font-size:22px} h1 span{color:var(--blue)}
+  .date-pick{display:flex;align-items:center;gap:8px;background:var(--panel);padding:8px 14px;border-radius:10px;border:1px solid var(--line)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+  .card .label{color:var(--muted);font-size:13px;margin-bottom:6px}
+  .card .value{font-size:26px;font-weight:700}
+  .pos{color:var(--green)} .neg{color:var(--red)}
+  .layout{display:grid;grid-template-columns:2fr 1fr;gap:14px}
+  @media(max-width:900px){.layout{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+  .panel h2{font-size:15px;margin-bottom:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  form{display:grid;gap:10px}
+  input,select{background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:10px;border-radius:8px;font-size:14px;width:100%}
+  button{cursor:pointer;border:none;border-radius:8px;padding:10px;font-size:14px;font-weight:600}
+  .btn-add{background:var(--blue);color:#fff}
+  .btn-del{background:transparent;color:var(--red);padding:4px 8px}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th{color:var(--muted);text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);font-weight:600}
+  td{padding:8px 6px;border-bottom:1px solid #222c44}
+  .tag{padding:2px 8px;border-radius:20px;font-size:12px}
+  .tag.in{background:rgba(46,204,143,.15);color:var(--green)}
+  .tag.out{background:rgba(255,92,114,.15);color:var(--red)}
+  .empty{color:var(--muted);text-align:center;padding:20px}
+  canvas{max-height:300px}
+</style>
+</head>
+<body>
+<header>
+  <h1>💰 Cash<span>Flow</span> Monitor</h1>
+  <div class="date-pick">📅 Dashboard date: <input type="date" id="dayPicker" style="width:auto;border:none;background:transparent"></div>
+</header>
+
+<div class="grid">
+  <div class="card"><div class="label">Money In (today)</div><div class="value pos" id="kpiIn">$0</div></div>
+  <div class="card"><div class="label">Money Out (today)</div><div class="value neg" id="kpiOut">$0</div></div>
+  <div class="card"><div class="label">Net Flow (today)</div><div class="value" id="kpiNet">$0</div></div>
+  <div class="card"><div class="label">Running Balance</div><div class="value" id="kpiBal">$0</div></div>
+</div>
+
+<div class="layout">
+  <div class="panel">
+    <h2>Daily Trend (last 14 days)</h2>
+    <canvas id="trendChart"></canvas>
+  </div>
+  <div class="panel">
+    <h2>Add Transaction</h2>
+    <form id="txForm">
+      <select id="type"><option value="in">⬆ Money In</option><option value="out">⬇ Money Out</option></select>
+      <input type="text" id="desc" placeholder="Description (e.g. Invoice #104)" required>
+      <input type="number" id="amount" placeholder="Amount" min="0.01" step="0.01" required>
+      <input type="date" id="date" required>
+      <button class="btn-add" type="submit">Add Transaction</button>
+    </form>
+    <h2 style="margin-top:20px">Today's Transactions</h2>
+    <div id="tableWrap"></div>
+  </div>
+</div>
+
+<script>
+const fmt = n => '$' + n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const today = () => new Date().toISOString().slice(0,10);
+let txs = JSON.parse(localStorage.getItem('cashflow') || '[]');
+if(!txs.length){ // seed demo data so charts aren't empty on first run
+  for(let i=13;i>=0;i--){
+    const d = new Date(); d.setDate(d.getDate()-i);
+    const ds = d.toISOString().slice(0,10);
+    txs.push({id:crypto.randomUUID(),type:'in',desc:'Sales revenue',amount:+(800+Math.random()*1500).toFixed(2),date:ds});
+    if(Math.random()>.3) txs.push({id:crypto.randomUUID(),type:'out',desc:'Expenses',amount:+(300+Math.random()*900).toFixed(2),date:ds});
+  }
+  save();
+}
+function save(){ localStorage.setItem('cashflow', JSON.stringify(txs)); }
+const $ = id => document.getElementById(id);
+
+function render(){
+  const day = $('dayPicker').value;
+  const todays = txs.filter(t=>t.date===day);
+  const inSum = todays.filter(t=>t.type==='in').reduce((s,t)=>s+t.amount,0);
+  const outSum = todays.filter(t=>t.type==='out').reduce((s,t)=>s+t.amount,0);
+  const bal = txs.reduce((s,t)=>s+(t.type==='in'?t.amount:-t.amount),0);
+  $('kpiIn').textContent = fmt(inSum);
+  $('kpiOut').textContent = fmt(outSum);
+  const net = inSum-outSum;
+  $('kpiNet').textContent = fmt(net); $('kpiNet').className='value '+(net>=0?'pos':'neg');
+  $('kpiBal').textContent = fmt(bal); $('kpiBal').className='value '+(bal>=0?'pos':'neg');
+
+  $('tableWrap').innerHTML = todays.length ? '<table><tr><th>Type</th><th>Description</th><th>Amount</th><th></th></tr>'+
+    todays.map(t=>'<tr><td><span class="tag '+t.type+'">'+(t.type==='in'?'IN':'OUT')+'</span></td><td>'+t.desc+'</td><td class="'+(t.type==='in'?'pos':'neg')+'">'+(t.type==='in'?'+':'-')+fmt(t.amount)+'</td><td><button class="btn-del" onclick="delTx(\''+t.id+'\')">✕</button></td></tr>').join('')+'</table>'
+    : '<div class="empty">No transactions on this day.</div>';
+  drawChart();
+}
+
+window.delTx = id => { txs = txs.filter(t=>t.id!==id); save(); render(); };
+
+$('txForm').onsubmit = e => {
+  e.preventDefault();
+  txs.push({id:crypto.randomUUID(),type:$('type').value,desc:$('desc').value.trim(),amount:+$('amount').value,date:$('date').value});
+  save(); e.target.reset(); $('date').value=$('dayPicker').value; render();
+};
+
+let chart;
+function drawChart(){
+  const days=[],ins=[],outs=[];
+  for(let i=13;i>=0;i--){
+    const d=new Date($('dayPicker').value+'T12:00:00'); d.setDate(d.getDate()-i);
+    const ds=d.toISOString().slice(0,10); days.push(ds.slice(5));
+    ins.push(txs.filter(t=>t.date===ds&&t.type==='in').reduce((s,t)=>s+t.amount,0));
+    outs.push(txs.filter(t=>t.date===ds&&t.type==='out').reduce((s,t)=>s+t.amount,0));
+  }
+  if(chart) chart.destroy();
+  chart = new Chart($('trendChart'),{type:'line',data:{labels:days,datasets:[
+    {label:'Money In',data:ins,borderColor:'#2ecc8f',backgroundColor:'rgba(46,204,143,.1)',fill:true,tension:.3},
+    {label:'Money Out',data:outs,borderColor:'#ff5c72',backgroundColor:'rgba(255,92,114,.1)',fill:true,tension:.3}]},
+    options:{plugins:{legend:{labels:{color:'#8b97b0'}}},scales:{x:{ticks:{color:'#8b97b0'},grid:{color:'#222c44'}},y:{ticks:{color:'#8b97b0'},grid:{color:'#222c44'}}}}});
+}
+
+$('dayPicker').value = today();
+$('dayPicker').onchange = render;   // <- dashboard adjusts to any selected day
+$('date').value = today();
+render();
+</script>
+</body>
+</html>
